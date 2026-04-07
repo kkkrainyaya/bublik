@@ -480,4 +480,9 @@ public class JDBCOracleStorage<K extends Integer, T extends RowId, S extends Con
         targetTable.enrichTable(session);
         session.close();
     }
+
+    @Override
+    public void initCache(List<Config> configs) throws SQLException {
+        log.info("Cache is not implemented for this storage");
+    }
 }

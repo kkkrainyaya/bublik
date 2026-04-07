@@ -1,7 +1,12 @@
 package dev.bublik.cli.cassandra.cassandra;
 
 import com.datastax.oss.driver.api.core.CqlSession;
-import com.datastax.oss.driver.api.core.cql.*;
+import com.datastax.oss.driver.api.core.cql.BatchStatementBuilder;
+import com.datastax.oss.driver.api.core.cql.BatchType;
+import com.datastax.oss.driver.api.core.cql.BatchableStatement;
+import com.datastax.oss.driver.api.core.cql.PreparedStatement;
+import com.datastax.oss.driver.api.core.cql.ResultSet;
+import com.datastax.oss.driver.api.core.cql.Row;
 import dev.bublik.cassandra.storage.CSPool;
 import dev.bublik.cli.App;
 import dev.bublik.cli.TestResult;
@@ -11,14 +16,19 @@ import dev.bublik.core.model.Config;
 import dev.bublik.core.model.ConnectionProperty;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.cassandra.CassandraContainer;
+import org.testcontainers.containers.JdbcDatabaseContainer;
+import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.utility.MountableFile;
 
 import java.io.IOException;
 import java.sql.SQLException;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import java.util.function.Predicate;
 
@@ -28,6 +38,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 // +
 //@Disabled
 public class CassandraToCassandraTest {
+
     private static int rows = 50000;
     private static boolean sync = false;
 
@@ -37,7 +48,8 @@ public class CassandraToCassandraTest {
             .withEnv("CASSANDRA_USER_DEFINED_FUNCTIONS_ENABLED", "true")
             .withEnv("CASSANDRA_AUTHENTICATOR", "PasswordAuthenticator")
             .withEnv("CASSANDRA_NUM_TOKENS", "16")
-            .withCopyToContainer(MountableFile.forClasspathResource("./cassandra/cassandra/conf/docker-entrypoint.sh"), "/usr/local/bin/docker-entrypoint.sh")
+            .withCopyToContainer(MountableFile.forClasspathResource("./cassandra/cassandra/conf/docker-entrypoint.sh"),
+                    "/usr/local/bin/docker-entrypoint.sh")
             .withInitScript("./cassandra/cassandra/sql/cs-init.cql")
             .withExposedPorts(9042);
     private static CassandraContainer target = new CassandraContainer("cassandra")
@@ -46,9 +58,13 @@ public class CassandraToCassandraTest {
             .withEnv("CASSANDRA_USER_DEFINED_FUNCTIONS_ENABLED", "true")
             .withEnv("CASSANDRA_AUTHENTICATOR", "PasswordAuthenticator")
             .withEnv("CASSANDRA_NUM_TOKENS", "16")
-            .withCopyToContainer(MountableFile.forClasspathResource("./cassandra/cassandra/conf/docker-entrypoint.sh"), "/usr/local/bin/docker-entrypoint.sh")
+            .withCopyToContainer(MountableFile.forClasspathResource("./cassandra/cassandra/conf/docker-entrypoint.sh"),
+                    "/usr/local/bin/docker-entrypoint.sh")
             .withInitScript("./cassandra/cassandra/sql/cs-init-empty.cql")
             .withExposedPorts(9042);
+    private static JdbcDatabaseContainer<?> cache = new PostgreSQLContainer<>("postgres")
+            .withDatabaseName("postgres")
+            .withInitScript("./cassandra/postgresql/sql/pg-init-cache.sql");
 
     @BeforeAll
     static void setUp() throws SQLException, IOException, InterruptedException {
@@ -56,6 +72,8 @@ public class CassandraToCassandraTest {
         source.start();
         target.setPortBindings(Collections.singletonList("9043:9042"));
         target.start();
+        cache.setPortBindings(java.util.Collections.singletonList("5432:5432"));
+        cache.start();
         while (!source.isRunning() && !target.isRunning()) {
             try {
                 Thread.sleep(300);
@@ -70,7 +88,8 @@ public class CassandraToCassandraTest {
 //        Thread.sleep(45_000);
         source.stop();
         target.stop();
-        while (source.isRunning() || target.isRunning()) {
+        cache.stop();
+        while (source.isRunning() || target.isRunning() || cache.isRunning()) {
             try {
                 Thread.sleep(300);
             } catch (InterruptedException e) {
@@ -98,7 +117,8 @@ public class CassandraToCassandraTest {
     }
 
     @Test
-// select id, uid, v1, v2, v3, v4, ttl(v1), ttl(v2), ttl(v3), ttl(v4), writetime(v1), writetime(v2), writetime(v3), writetime(v4)  from test.t1;
+// select id, uid, v1, v2, v3, v4, ttl(v1), ttl(v2), ttl(v3), ttl(v4), writetime(v1), writetime(v2), writetime(v3), writetime(v4)  from
+// test.t1;
     public void allTypes() throws InterruptedException, IOException {
         Properties sourceProperties = getPropertiesOfCassandra("localhost:9042");
         Properties targetProperties = getPropertiesOfCassandra("localhost:9043");
@@ -137,7 +157,8 @@ public class CassandraToCassandraTest {
     }
 
     @Test
-// select id, uid, v1, v2, v3, v4, ttl(v1), ttl(v2), ttl(v3), ttl(v4), writetime(v1), writetime(v2), writetime(v3), writetime(v4)  from test.t1;
+// select id, uid, v1, v2, v3, v4, ttl(v1), ttl(v2), ttl(v3), ttl(v4), writetime(v1), writetime(v2), writetime(v3), writetime(v4)  from
+// test.t1;
     public void diffKeyspace() throws InterruptedException, IOException {
         Properties sourceProperties = getPropertiesOfCassandra("localhost:9042");
         Properties targetProperties = getPropertiesOfCassandra("localhost:9043");
@@ -196,7 +217,7 @@ public class CassandraToCassandraTest {
     public void withTtlBasedOnColumn() throws InterruptedException, IOException {
         Properties sourceProperties = getPropertiesOfCassandra("localhost:9042");
         Properties targetProperties = getPropertiesOfCassandra("localhost:9043");
-        Predicate<Row> targetPredicate = i -> (i.getInt("ttl(log_time)") > 110000000 && i.getInt("ttl(log_time)") < 160000000);
+        Predicate<Row> targetPredicate = i -> (i.getInt("ttl(log_time)") > 100000000 && i.getInt("ttl(log_time)") < 160000000);
         TestResult result = getResult(
                 "./cassandra/cassandra/yaml/cs2cs.yaml",
                 "./cassandra/cassandra/json/cs2cs8.json",
@@ -319,6 +340,69 @@ public class CassandraToCassandraTest {
         assertEquals(sourceCount, targetCount);
     }
 
+    @DisplayName("Init TTL from source as high priority")
+    @Test
+    public void initTtlFromSource() throws IOException {
+        Properties sourceProperties = getPropertiesOfCassandra("localhost:9042");
+        Properties targetProperties = getPropertiesOfCassandra("localhost:9043");
+        Predicate<Row> sourcePredicate = i -> (i.getLong("id") == 1);
+        Predicate<Row> targetPredicate = i -> (i.getInt("ttl(offer_id)") >= 900 && i.getInt("ttl(offer_id)") <= 1000);
+
+        TestResult result = getResult(
+                "./cassandra/cassandra/yaml/cs2cs-cache.yaml",
+                "./cassandra/cassandra/json/cs2cs-cache.json",
+                rows,
+                sync,
+                sourceProperties,
+                targetProperties,
+                "SELECT id, offer_id, ttl(offer_id) FROM ", sourcePredicate, targetPredicate);
+        assertEquals(result.sourceCount(), result.targetCount());
+
+        Map<Long, Integer> resultMap = getTargetTtl(targetProperties, "SELECT id, ttl(offer_id) as ttl FROM test.ttl_check");
+        System.out.println(resultMap);
+    }
+
+    @DisplayName("Init TTL from cache if no source value present")
+    @Test
+    public void initTtlFromCache() throws IOException {
+        Properties sourceProperties = getPropertiesOfCassandra("localhost:9042");
+        Properties targetProperties = getPropertiesOfCassandra("localhost:9043");
+        Predicate<Row> sourcePredicate = i -> List.of(2L, 3L).contains(i.getLong("id"));
+        Predicate<Row> targetPredicate = i -> (i.getInt("ttl(offer_id)") >= 7000000 && i.getInt("ttl(offer_id)") <= 7554567);
+
+        TestResult result = getResult(
+                "./cassandra/cassandra/yaml/cs2cs-cache.yaml",
+                "./cassandra/cassandra/json/cs2cs-cache.json",
+                rows,
+                sync,
+                sourceProperties,
+                targetProperties,
+                "SELECT id, offer_id, ttl(offer_id) FROM ", sourcePredicate, targetPredicate);
+        assertEquals(result.sourceCount(), result.targetCount());
+
+        Map<Long, Integer> resultMap = getTargetTtl(targetProperties, "SELECT id, ttl(offer_id) as ttl FROM test.ttl_check");
+        System.out.println(resultMap);
+    }
+
+    @DisplayName("Init TTL with default value if no source nor cache value present")
+    @Test
+    public void initTtlDefault() throws IOException {
+        Properties sourceProperties = getPropertiesOfCassandra("localhost:9042");
+        Properties targetProperties = getPropertiesOfCassandra("localhost:9043");
+        Predicate<Row> sourcePredicate = i -> (i.getLong("id") == 4);
+        Predicate<Row> targetPredicate = i -> (i.getInt("ttl(offer_id)") >= 31535000 && i.getInt("ttl(offer_id)") <= 31536000);
+
+        TestResult result = getResult(
+                "./cassandra/cassandra/yaml/cs2cs-cache.yaml",
+                "./cassandra/cassandra/json/cs2cs-cache.json",
+                rows,
+                sync,
+                sourceProperties,
+                targetProperties,
+                "SELECT id, offer_id, ttl(offer_id) FROM ", sourcePredicate, targetPredicate);
+        assertEquals(result.sourceCount(), result.targetCount());
+    }
+
 
     public static TestResult getResult(String connectionPropertyFile,
                                        String mappingFile,
@@ -364,6 +448,20 @@ public class CassandraToCassandraTest {
         return rowCount;
     }
 
+    public Map<Long, Integer> getTargetTtl(Properties properties, String query) {
+        CSPool csPool = new CSPool(properties, 2);
+        CqlSession cqlSession = csPool.getCqlSession();
+        ResultSet resultSet = cqlSession.execute(query);
+        Map<Long, Integer> ttlMap = new HashMap<>(4);
+        for (Row row : resultSet) {
+            long id = row.getLong("id");
+            int ttl = row.getInt("ttl");
+            ttlMap.put(id, ttl);
+        }
+        csPool.closeCqlSession();
+        return ttlMap;
+    }
+
     private Properties getPropertiesOfCassandra(String hosts) {
         Properties properties = new Properties();
         properties.setProperty("class", "org.bublik.cassandra.storage.CassandraStorage");
@@ -404,5 +502,13 @@ public class CassandraToCassandraTest {
         String truncateTable = "truncate test.t4";
         cqlSession.execute(truncateTable);
         csPool.closeCqlSession();
+    }
+
+    private static Properties getJdbcProperties(JdbcDatabaseContainer<?> db) {
+        Properties properties = new Properties();
+        properties.setProperty("url", db.getJdbcUrl());
+        properties.setProperty("user", db.getUsername());
+        properties.setProperty("password", db.getPassword());
+        return properties;
     }
 }

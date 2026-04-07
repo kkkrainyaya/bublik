@@ -1,0 +1,17 @@
+[
+  {
+    "fromSchemaName" : "test",
+    "fromTableName" : "ttl_check",
+    "toSchemaName" : "test",
+    "toTableName" : "ttl_check",
+    "columnToColumn" : {
+      "id"    : "id",
+      "offer_id"   : "offer_id"
+    },
+    "cacheSchemaName" : "public",
+    "cacheTableName" : "offer",
+    "cacheKeyColumn" : "id",
+    "cacheValueColumn" : "open_date",
+    "columnToCacheKey" : "offer_id"
+  }
+]

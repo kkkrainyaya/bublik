@@ -158,3 +158,12 @@ insert into test.filter1 (id, uid, v1, v2, v3, v4) values (1, 0, 11, 21, 30, 'a'
 insert into test.filter1 (id, uid, v1, v2, v3, v4) values (1, 2, 11, 21, 32, 'a');
 insert into test.filter1 (id, uid, v1, v2, v3, v4) values (2, 1, 11, 21, 36, 'a');
 insert into test.filter1 (id, uid, v1, v2, v3, v4) values (2, 2, 11, 21, 37, 'a');
+
+create table test.ttl_check (
+    id bigint,
+    offer_id bigint,
+    primary key (id));
+insert into test.ttl_check (id, offer_id) values (1, 12345) using ttl 1000;
+insert into test.ttl_check (id, offer_id) values (2, 12345);
+insert into test.ttl_check (id, offer_id) values (3, 23456);
+insert into test.ttl_check (id, offer_id) values (4, 3);

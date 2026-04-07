@@ -2,7 +2,11 @@ package dev.bublik.cassandra.storage;
 
 import com.datastax.oss.driver.api.core.CqlSession;
 import com.datastax.oss.driver.api.core.DefaultConsistencyLevel;
-import com.datastax.oss.driver.api.core.cql.*;
+import com.datastax.oss.driver.api.core.cql.BatchStatement;
+import com.datastax.oss.driver.api.core.cql.BatchStatementBuilder;
+import com.datastax.oss.driver.api.core.cql.BatchableStatement;
+import com.datastax.oss.driver.api.core.cql.PreparedStatement;
+import com.datastax.oss.driver.api.core.cql.Row;
 import com.datastax.oss.driver.api.core.data.UdtValue;
 import com.datastax.oss.driver.api.core.metadata.token.TokenRange;
 import com.datastax.oss.driver.api.core.type.UserDefinedType;
@@ -10,10 +14,22 @@ import com.datastax.oss.driver.api.core.type.codec.CodecNotFoundException;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import dev.bublik.cassandra.storage.cassandraaddons.*;
-import dev.bublik.core.model.*;
 import dev.bublik.cassandra.model.CSComplexType;
 import dev.bublik.cassandra.model.CSTable;
+import dev.bublik.cassandra.storage.cassandraaddons.BatchEntity;
+import dev.bublik.cassandra.storage.cassandraaddons.CSRecord;
+import dev.bublik.cassandra.storage.cassandraaddons.CSValue;
+import dev.bublik.cassandra.storage.cassandraaddons.CSValueAttribute;
+import dev.bublik.cassandra.storage.cassandraaddons.MM3Batch;
+import dev.bublik.core.cache.CacheHolder;
+import dev.bublik.core.model.Chunk;
+import dev.bublik.core.model.Column;
+import dev.bublik.core.model.ColumnValue;
+import dev.bublik.core.model.Config;
+import dev.bublik.core.model.ConnectionProperty;
+import dev.bublik.core.model.KV;
+import dev.bublik.core.model.LogMessage;
+import dev.bublik.core.model.Table2Table;
 import dev.bublik.core.storage.JDBCStorage;
 import dev.bublik.core.storage.Storage;
 import dev.bublik.core.storage.StorageClass;
@@ -27,13 +43,33 @@ import java.nio.ByteBuffer;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
-import java.time.*;
-import java.util.*;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.ZoneId;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
-import static dev.bublik.cassandra.storage.cassandraaddons.MM3.*;
+import static dev.bublik.cassandra.storage.cassandraaddons.MM3.byteBufferToBytes;
+import static dev.bublik.cassandra.storage.cassandraaddons.MM3.byteToBytes;
+import static dev.bublik.cassandra.storage.cassandraaddons.MM3.compositeToBytes;
+import static dev.bublik.cassandra.storage.cassandraaddons.MM3.getTokenRange;
+import static dev.bublik.cassandra.storage.cassandraaddons.MM3.intToBytes;
+import static dev.bublik.cassandra.storage.cassandraaddons.MM3.longToBytes;
+import static dev.bublik.cassandra.storage.cassandraaddons.MM3.smallIntToBytes;
+import static dev.bublik.cassandra.storage.cassandraaddons.MM3.stringToBytes;
+import static dev.bublik.cassandra.storage.cassandraaddons.MM3.timestampToBytes;
+import static dev.bublik.cassandra.storage.cassandraaddons.MM3.uuidToBytes;
 import static dev.bublik.core.util.Utils.getStackTrace;
 
 public class CassandraStorage<K extends UUID, T extends Long, S extends CqlSession, R extends com.datastax.oss.driver.api.core.cql.ResultSet>
@@ -738,18 +774,42 @@ public class CassandraStorage<K extends UUID, T extends Long, S extends CqlSessi
         Map<Integer, byte[]> mapBytes = new TreeMap<>();
         Integer recordTtl = null;
         Long recordTimestamp = null;
+        // Устанавливаем дефолтное значение из поля withTTL
         if (t2t.ttlColumn() != null) {
             recordTtl = row.getInt(t2t.ttlColumn().columnName());
         }
         if (t2t.timestampColumn() != null) {
             recordTimestamp = row.getLong(t2t.timestampColumn().columnName());
         }
+
+        // Вычисляем TTL из кэша при наличии
+        if (recordTtl == null && CacheHolder.getSourceColumnToCacheKey() != null) {
+            Long keyValue = row.getLong(CacheHolder.getSourceColumnToCacheKey());
+            Instant openDate = CacheHolder.get(keyValue);
+            long oneYearInSeconds = 365L * 24 * 60 * 60;
+            long oneMonthInSeconds = 30L * 24 * 60 * 60;
+            if (openDate != null) {
+                // (now - open_date) + 1 год + 1 месяц
+                Duration duration = Duration.between(Instant.now(), openDate);
+                long deltaSeconds = duration.getSeconds();
+                long ttl = deltaSeconds + oneYearInSeconds + oneMonthInSeconds;
+                // Если полученный ttl <= 0, то устанавливаем минимальное значение (1 месяц)
+                recordTtl = Math.toIntExact(ttl <= 0 ? oneMonthInSeconds : ttl);
+            }
+
+            // Проставляем 1 год если отсутствуют значения в источнике и кэше
+            if (recordTtl == null) {
+                recordTtl = Math.toIntExact(oneYearInSeconds);
+
+            }
+        }
+
         for (Map.Entry<Column, Column> entry: column2Column.entrySet()) {
             Column sourceColumn = entry.getKey();
             Column targetColumn = entry.getValue();
             String sClmName = entry.getKey().columnName();
             CSObj csObj = getCSObj(row, targetColumn, sClmName);
-            objectList.add(getCSValue(recordTtl, recordTimestamp, row, sourceColumn, entry.getValue(), csObj.object(), majorVersion));
+            objectList.add(getCSValue(recordTtl, CacheHolder.getSourceColumnToCacheKey() != null, recordTimestamp, row, sourceColumn, entry.getValue(), csObj.object(), majorVersion));
             if (targetColumn.isPartitionKey() && csObj.object() != null) {
                 mapBytes.put(targetColumn.columnPosition(), csObj.bytes());
             }
@@ -762,6 +822,7 @@ public class CassandraStorage<K extends UUID, T extends Long, S extends CqlSessi
     }
 
     public CSValue getCSValue(Integer recordTtl,
+                              Boolean cacheTtlEnabled,
                               Long recordTimestamp,
                               Row row,
                               Column sourceColumn,
@@ -769,21 +830,23 @@ public class CassandraStorage<K extends UUID, T extends Long, S extends CqlSessi
                               Object value,
                               int majorVersion) {
         Integer ttl;
+        Integer sourceTtl = null;
         Long timestamp;
         boolean b = !(sourceColumn.isCollection() && !sourceColumn.isFrozen() && majorVersion < 5);
-        if (recordTtl == null && !sourceColumn.isStatic() && sourceColumn.columnPosition() == -1) {
+        if ((recordTtl == null || cacheTtlEnabled) && !sourceColumn.isStatic() && sourceColumn.columnPosition() == -1) {
             if (b) {
                 try {
-                    ttl = row.get("ttl(" + sourceColumn.columnName() + ")", Integer.class);
+                    sourceTtl = row.get("ttl(" + sourceColumn.columnName() + ")", Integer.class);
                 } catch (CodecNotFoundException e) {
-                    ttl = null;
+                    sourceTtl = null;
                 }
             } else {
-                ttl = null;
+                sourceTtl = null;
             }
-        } else {
-            ttl = recordTtl;
         }
+        ttl = sourceTtl != null ? sourceTtl : recordTtl;
+
+
         if (recordTimestamp == null && !sourceColumn.isStatic() && sourceColumn.columnPosition() == -1) {
             if (b) {
                 try {
@@ -798,5 +861,10 @@ public class CassandraStorage<K extends UUID, T extends Long, S extends CqlSessi
             timestamp = recordTimestamp;
         }
         return new CSValue(targetColumn, value, new CSValueAttribute(ttl, timestamp));
+    }
+
+    @Override
+    public void initCache(List<Config> configs) throws SQLException {
+        log.info("Cache is not implemented for this storage");
     }
 }
