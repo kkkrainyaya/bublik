@@ -162,4 +162,9 @@ public class JDBCMSSQLStorage<K extends Integer, T extends String, S extends Con
     public void enrichTable(Table<S> sourceTable, Table<S> targetTable) throws SQLException {
 
     }
+
+    @Override
+    public void initCache(List<Config> configs) throws SQLException {
+        log.info("Cache is not supported for MSSQL");
+    }
 }

@@ -1,4 +1,4 @@
-/Users/d.rudik/IdeaProjects/bublik/bublik-mssql/src/main/java/dev/bublik/mssql/constants/SQLConstants.java
-/Users/d.rudik/IdeaProjects/bublik/bublik-mssql/src/main/java/dev/bublik/mssql/model/MSSQLChunk.java
-/Users/d.rudik/IdeaProjects/bublik/bublik-mssql/src/main/java/dev/bublik/mssql/model/MSSQLTable.java
-/Users/d.rudik/IdeaProjects/bublik/bublik-mssql/src/main/java/dev/bublik/mssql/storage/JDBCMSSQLStorage.java
+/Users/m.kraynyaya/projects/bublik/bublik-mssql/src/main/java/dev/bublik/mssql/constants/SQLConstants.java
+/Users/m.kraynyaya/projects/bublik/bublik-mssql/src/main/java/dev/bublik/mssql/model/MSSQLChunk.java
+/Users/m.kraynyaya/projects/bublik/bublik-mssql/src/main/java/dev/bublik/mssql/model/MSSQLTable.java
+/Users/m.kraynyaya/projects/bublik/bublik-mssql/src/main/java/dev/bublik/mssql/storage/JDBCMSSQLStorage.java

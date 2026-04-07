@@ -1,6 +1,14 @@
 package dev.bublik.core.service;
 
-import dev.bublik.core.model.*;
+import dev.bublik.core.cache.CacheHolder;
+import dev.bublik.core.model.Chunk;
+import dev.bublik.core.model.Column;
+import dev.bublik.core.model.ColumnValue;
+import dev.bublik.core.model.Config;
+import dev.bublik.core.model.ConnectionProperty;
+import dev.bublik.core.model.LogMessage;
+import dev.bublik.core.model.Table;
+import dev.bublik.core.model.Table2Table;
 import dev.bublik.core.storage.AutoColseableStorageClass;
 import dev.bublik.core.storage.JDBCStorageClass;
 import dev.bublik.core.storage.Storage;
@@ -15,18 +23,22 @@ import java.sql.Connection;
 import java.sql.Driver;
 import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 
-
-import static dev.bublik.core.constants.CLassConstants.*;
+import static dev.bublik.core.constants.CLassConstants.MSSQL_STORAGE_CLASS_NAME;
+import static dev.bublik.core.constants.CLassConstants.ORACLE_STORAGE_CLASS_NAME;
+import static dev.bublik.core.constants.CLassConstants.POSTGRES_STORAGE_CLASS_NAME;
+import static dev.bublik.core.constants.CLassConstants.YDB_STORAGE_CLASS_NAME;
 import static dev.bublik.core.util.Utils.getStackTrace;
 
 public interface StorageService<K, T, S extends AutoCloseable, R> {
     Logger log = LoggerFactory.getLogger(StorageService.class);
 
-    void start(List<Config> configs, boolean sync, int rows, Storage<K, T, S, R> targetStorage, String tableName) throws SQLException;
+    void start(List<Config> configs, boolean sync, int rows, Storage<K, T, S, R> targetStorage, String tableName,  Storage<K, T, S, R> cacheStorage) throws SQLException;
     void createGlobalOutbox(String tableName) throws SQLException;
     <V, W> void insertColumnValue(List<ColumnValue<V>> columnValues, Chunk<K, T, S, R> chunk, W writer) throws SQLException;
     <W> W getWriter(Chunk<K, T, S, R> chunk, String tableName) throws SQLException;
@@ -53,6 +65,7 @@ public interface StorageService<K, T, S extends AutoCloseable, R> {
     void setSession(S session);
     void enrichTable(Table<S> sourceTable) throws SQLException;
     void enrichTable(Table<S> sourceTable, Table<S> targetTable) throws SQLException;
+    void initCache(List<Config> configs) throws SQLException;
 
     static Storage<?, ?, ?, ?> getStorage(StorageClass storageClass, Properties properties, ConnectionProperty connectionProperty) throws SQLException {
         if (storageClass instanceof AutoColseableStorageClass) {
@@ -117,12 +130,28 @@ public interface StorageService<K, T, S extends AutoCloseable, R> {
         String targetHosts = property.getToProperty().getProperty("hosts");
         log.info("TARGET: {}", targetUrl == null ? targetHosts : targetUrl);
         log.info("TARGET USERNAME: {}", property.getToProperty().getProperty("user"));
+        String cacheUrl = property.getCacheProperties() != null ? property.getCacheProperty().getProperty("url") : null;
+        String cacheHosts = property.getCacheProperties() != null ? property.getCacheProperty().getProperty("hosts") : null;
+        log.info("CACHE: {}", cacheUrl == null ? cacheHosts : cacheUrl);
+        log.info("CACHE USERNAME: {}", property.getCacheProperties() != null ? property.getCacheProperty().getProperty("user") : null);
         StorageClass sourceStorageClass = StorageService.getStorageClass(property.getFromProperty());
         StorageClass targetStorageClass = StorageService.getStorageClass(property.getToProperty());
         try (Storage sourceStorage = getStorage(sourceStorageClass, property.getFromProperty(), property);
              Storage targetStorage = getStorage(targetStorageClass, property.getToProperty(), property)) {
             assert sourceStorage != null;
-            sourceStorage.start(configs, sync, rows, targetStorage, chunkTable);
+
+            if (property.getCacheProperties() != null) {
+                StorageClass cacheStorageClass = StorageService.getStorageClass(property.getCacheProperty());
+                try(Storage cacheStorage = getStorage(cacheStorageClass, property.getCacheProperty(), property)) {
+                    if (cacheStorage != null) {
+                        cacheStorage.initCache(configs);
+                        sourceStorage.start(configs, sync, rows, targetStorage, chunkTable, cacheStorage);
+                        CacheHolder.clear();
+                    }
+                }
+            }
+
+            sourceStorage.start(configs, sync, rows, targetStorage, chunkTable, null);
         } catch (SQLException e) {
             throw e;
         } catch (Exception e) {

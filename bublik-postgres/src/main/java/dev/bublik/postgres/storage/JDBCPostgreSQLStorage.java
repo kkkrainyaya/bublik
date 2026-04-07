@@ -1,5 +1,7 @@
 package dev.bublik.postgres.storage;
 
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 import de.bytefish.pgbulkinsert.exceptions.BinaryWriteFailedException;
 import de.bytefish.pgbulkinsert.pgsql.constants.DataType;
 import de.bytefish.pgbulkinsert.pgsql.model.interval.Interval;
@@ -7,6 +9,7 @@ import de.bytefish.pgbulkinsert.pgsql.model.range.Range;
 import de.bytefish.pgbulkinsert.row.SimpleRow;
 import de.bytefish.pgbulkinsert.row.SimpleRowWriter;
 import de.bytefish.pgbulkinsert.util.PostgreSqlUtils;
+import dev.bublik.core.cache.CacheHolder;
 import dev.bublik.core.constants.ChunkStatus;
 import dev.bublik.core.constants.PGKeywords;
 import dev.bublik.core.exception.SourceSQLException;
@@ -37,6 +40,8 @@ import java.time.*;
 import java.util.*;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
+
+import javax.sql.DataSource;
 
 import static dev.bublik.core.constants.CLassConstants.ORACLE_STORAGE_CLASS_NAME;
 import static dev.bublik.core.util.ColumnUtil.*;
@@ -158,13 +163,13 @@ public class JDBCPostgreSQLStorage<K extends Integer, T extends Long, S extends 
             }
         }
         if (config.columnToColumn() != null) {
-            for (Map.Entry<String,String> entry : config.columnToColumn().entrySet()) {
+            for (Map.Entry<String, String> entry : config.columnToColumn().entrySet()) {
                 Column sourceColumn = sourceTable.getColumns().stream()
                         .filter(c -> c.getColumnNameWithoutQuotes()
                                 .equalsIgnoreCase(entry.getKey().replaceAll("\"", "")))
                         .findFirst()
                         .orElseThrow(() -> new RuntimeException(entry.getKey() + " not found in source table " +
-                                sourceTable.getSchemaName() + "." + sourceTable.getTableName()));
+                                                                sourceTable.getSchemaName() + "." + sourceTable.getTableName()));
                 Column targetColumn = targetTable.getColumns().stream()
                         .filter(c -> c.getColumnNameWithoutQuotes()
                                 .equalsIgnoreCase(entry.getValue().replace("\"", "")))
@@ -489,7 +494,7 @@ public class JDBCPostgreSQLStorage<K extends Integer, T extends Long, S extends 
                                             columnPosition,
                                             i.getKey(),
                                             columnType.equals("bigserial") ? "bigint" : columnType,
-                                            dataType, null, null, null, null, 0 , null, 0, null, false, false, false)));
+                                            dataType, null, null, null, null, 0, null, 0, null, false, false, false)));
                 }
             }
             resultSet.close();
@@ -1499,5 +1504,53 @@ public class JDBCPostgreSQLStorage<K extends Integer, T extends Long, S extends 
         Connection connectionTo = chunk.getTargetSession();
         ((SimpleRowWriter) writer).close();
         connectionTo.commit();
+    }
+
+
+    @Override
+    public void initCache(List<Config> configs) throws SQLException {
+        log.info("Init cache start");
+
+        for (Config config : configs) {
+
+            if (config.cacheSchemaName() == null || config.cacheTableName() == null || config.cacheValueColumn() == null) {
+                log.info("No cache tables defined in configs, skipping cache initialization");
+                return;
+            }
+
+            HikariConfig hikariConfig = new HikariConfig();
+            hikariConfig.setJdbcUrl(getConnectionProperty().getCacheProperty().getProperty("url"));
+            hikariConfig.setUsername(getConnectionProperty().getCacheProperty().getProperty("user"));
+            hikariConfig.setPassword(getConnectionProperty().getCacheProperty().getProperty("password"));
+            hikariConfig.setConnectionTimeout(3_000);
+            hikariConfig.setAutoCommit(false);
+            hikariConfig.setMaximumPoolSize(1);
+            DataSource dataSource = new HikariDataSource(hikariConfig);
+            Connection cacheConnection = dataSource.getConnection();
+
+            CacheHolder.clear();
+
+            String query = "SELECT " + config.cacheKeyColumn() + ", " + config.cacheValueColumn() + " FROM " + config.cacheSchemaName()
+                           + "." + config.cacheTableName();
+            log.info("Loading cache for {}.{} ({} -> {}): {}", config.cacheSchemaName(),
+                    config.cacheTableName(), config.cacheKeyColumn(), config.cacheValueColumn(), query);
+
+            CacheHolder.setSourceColumnToCacheKey(config.columnToCacheKey());
+
+            try (PreparedStatement statement = cacheConnection.prepareStatement(query);
+                    ResultSet resultSet = statement.executeQuery()) {
+
+                while (resultSet.next()) {
+                    long key = resultSet.getLong(config.cacheKeyColumn());
+                    Timestamp valueTs = resultSet.getTimestamp(config.cacheValueColumn());
+                    Instant openDate = valueTs != null ? valueTs.toInstant() : null;
+                    CacheHolder.put(key, openDate);
+                }
+            }
+            log.info("Total cache loaded: {} rows", CacheHolder.size());
+
+            cacheConnection.commit();
+            cacheConnection.close();
+        }
     }
 }

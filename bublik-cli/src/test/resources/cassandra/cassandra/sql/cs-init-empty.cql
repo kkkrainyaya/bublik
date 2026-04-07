@@ -126,3 +126,8 @@ create table test.filter1 (
     v3 int static,
     v4 varchar,
     primary key (id, uid));
+
+create table test.ttl_check (
+    id bigint,
+    offer_id bigint,
+    primary key (id));
