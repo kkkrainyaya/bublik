@@ -3,6 +3,8 @@ CREATE KEYSPACE test WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replicati
 CREATE TABLE test.ttl_check (
     id bigint,
     offer_id bigint,
-    flags tinyint,
+    client_type int,
+    flags int,
+    temp_aud text,
     primary key (id)
 );

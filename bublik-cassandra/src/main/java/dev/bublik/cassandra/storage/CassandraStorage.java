@@ -14,9 +14,6 @@ import com.datastax.oss.driver.api.core.type.codec.CodecNotFoundException;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import dev.bublik.cassandra.storage.cassandraaddons.*;
-import dev.bublik.core.cache.CacheHolder;
-import dev.bublik.core.model.*;
 import dev.bublik.cassandra.model.CSComplexType;
 import dev.bublik.cassandra.model.CSTable;
 import dev.bublik.cassandra.storage.cassandraaddons.BatchEntity;
@@ -27,6 +24,7 @@ import dev.bublik.cassandra.storage.cassandraaddons.MM3Batch;
 import dev.bublik.core.cache.CacheHolder;
 import dev.bublik.core.model.Chunk;
 import dev.bublik.core.model.Column;
+import dev.bublik.core.model.Column2Column;
 import dev.bublik.core.model.ColumnValue;
 import dev.bublik.core.model.Config;
 import dev.bublik.core.model.ConnectionProperty;
@@ -465,6 +463,9 @@ public class CassandraStorage<K extends UUID, T extends Long, S extends CqlSessi
 
             if (cacheName.equals("targeting_type")){
                 byte excluded = CacheHolder.cacheExists(cacheName) && CacheHolder.getCache(cacheName).get(key) != null ? (byte) 0b00000100 : (byte) 0b00000000;
+                if (excluded != 0 && (resultSet.getInt("client_type") != 0 || !resultSet.getString("temp_aud").equals("[]"))){
+                    log.warn("Не пустое значение client_type или temp_aud для исключенного клиент-оффера {} - {}", resultSet.getString("client_id"), key);
+                };
                 bytes = byteToBytes(excluded);
                 v = excluded;
             }

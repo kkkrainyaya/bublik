@@ -5,8 +5,10 @@
     "toSchemaName": "test",
     "toTableName": "ttl_check",
     "columnToColumn": {
-      "id": "id",
+      "client_id": "client_id",
       "offer_id": "offer_id",
+      "client_type": "client_type",
+      "temp_aud": "temp_aud",
       "CACHE.targeting_type": "flags"
     },
     "cacheToQuery": {

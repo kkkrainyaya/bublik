@@ -71,7 +71,7 @@ public class PostgresToCassandraTtlTest {
                 .build()) {
             session.execute("DROP KEYSPACE IF EXISTS test");
             session.execute("CREATE KEYSPACE test WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : '1' }");
-            session.execute("CREATE TABLE test.ttl_check (id bigint, offer_id bigint, flags tinyint, primary key (id))");
+            session.execute("CREATE TABLE test.ttl_check (client_id text, offer_id bigint, client_type tinyint, flags tinyint, temp_aud text, primary key (client_id))");
         }
     }
 
@@ -106,7 +106,7 @@ public class PostgresToCassandraTtlTest {
 
         // Получаем фактические TTL из Cassandra
         Map<Long, Integer> actualTtlMap =
-                getTargetTtlByOfferId(targetProperties, "SELECT id, offer_id, ttl(offer_id) as ttl FROM test.ttl_check");
+                getTargetTtlByOfferId(targetProperties, "SELECT client_id, offer_id, ttl(offer_id) as ttl FROM test.ttl_check");
 
         // Рассчитываем ожидаемые TTL из кэш-таблицы ПОСЛЕ миграции (т.к. TTL записывается в момент миграции)
         Map<Long, Integer> expectedTtlMap = getExpectedTtlMap(sourceProperties);
@@ -159,7 +159,7 @@ public class PostgresToCassandraTtlTest {
         Map<Long, Byte> expectedFlags = getExpectedFlagsMap(sourceProperties);
 
         // Получаем фактические flags из Cassandra
-        Map<Long, Byte> actualFlagsMap = getTargetByOfferId(targetProperties, "SELECT id, offer_id, flags FROM test.ttl_check");
+        Map<Long, Byte> actualFlagsMap = getTargetByOfferId(targetProperties, "SELECT client_id, offer_id, flags FROM test.ttl_check");
         System.out.println("Expected flags map: " + expectedFlags);
         System.out.println("Actual flags map: " + actualFlagsMap);
 
@@ -218,7 +218,7 @@ public class PostgresToCassandraTtlTest {
             sourceCount += countRows(sourceProperties,
                     "SELECT count(1) FROM " + config.fromSchemaName() + "." + config.fromTableName());
             targetCount += countCassandra(targetProperties,
-                    "SELECT id, offer_id FROM ",
+                    "SELECT client_id, offer_id FROM ",
                     (config.toSchemaName() == null ? config.fromSchemaName() : config.toSchemaName()) + "." +
                     (config.toTableName() == null ? config.fromTableName() : config.toTableName()),
                     null);
