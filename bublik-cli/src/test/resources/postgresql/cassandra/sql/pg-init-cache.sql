@@ -42,6 +42,10 @@ values (56789, '2025-06-04 00:00:00.000 +0300', 'HEALTH', 'TRANSACTION', '2026-1
 insert into public.offer (id, open_date, cb_service_name, targeting_type, close_date)
 values (77777, '2020-01-01 00:00:00.000 +0300', 'HEALTH', 'TRANSACTION', '2020-02-01 00:00:00.000 +0300');
 
+-- id=88888: - для теста верхнего ограничения TTL
+insert into public.offer (id, open_date, cb_service_name, targeting_type, close_date)
+values (88888, '2020-01-01 00:00:00.000 +0300', 'AVIA', 'TRANSACTION', '2030-02-01 00:00:00.000 +0300');
+
 -- Вставка тестовых данных в ttl_check
 -- client_id=1: offer_id=12345 - TTL из кэша (2 года)
 insert into public.source (client_id, offer_id, client_type, temp_aud) values ('1', 12345, null, '[]'::jsonb);
