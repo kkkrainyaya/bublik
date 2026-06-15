@@ -124,10 +124,12 @@ public class PostgresToCassandraTtlTest {
                 assert actualTtl != null && actualTtl > 62900000 && actualTtl <= 63100000 :
                         "TTL для offer_id=99999 (отсутствует в кэше) должен быть 2 года, фактически: " + actualTtl;
             } else if (offerId == 77777L) {
-                // offer_id=77777 - отрицательный TTL, заменён на 1 неделю
+                // offer_id=77777 - отрицательный TTL (оффер уже закрыт), заменён на 1 неделю
                 assert actualTtl != null && actualTtl >= 604700 && actualTtl <= 604900 :
                         "TTL для offer_id=77777 (отрицательный - оффер уже закрыт) должен быть 1 неделя, фактически: " + actualTtl;
             } else {
+                // Остальные записи - сравниваем с расчётным значением (допуск ±2 дня на время выполнения миграции)
+                // Для HOTELS_POSTPAY (12345, 23456) TTL ограничен 4 годами
                 Integer expectedTtl = expectedTtlMap.get(offerId);
                 assert expectedTtl != null : "Ожидаемый TTL не найден для offer_id=" + offerId;
                 assert actualTtl != null && Math.abs(actualTtl - expectedTtl) <= 172900 :
@@ -317,29 +319,36 @@ public class PostgresToCassandraTtlTest {
      * Рассчитывает ожидаемое TTL в секундах на основе close_date и cb_service_name.
      * Формула: EXTRACT(EPOCH FROM (close_date + interval - NOW()))
      * interval зависит от сервиса: HOTELS_POSTPAY=2 года, AVIA/CONCERT=6 месяцев, остальные=1 месяц
+     * Максимальное значение TTL ограничено 4 годами (как в CassandraStorage)
      */
     private int calculateExpectedTtl(long offerId, String serviceName, java.sql.Timestamp closeDate) {
         long now = System.currentTimeMillis() / 1000;
         long closeTime = closeDate.getTime() / 1000;
-
+        
         long intervalSeconds;
         if ("HOTELS_POSTPAY".equals(serviceName) || "HOTELS_POSTPAY_PREDICTOR".equals(serviceName)) {
             intervalSeconds = 2L * 365 * 24 * 60 * 60; // 2 года = 63072000 сек
-        } else if ("AVIA".equals(serviceName) || "CONCERT".equals(serviceName) ||
+        } else if ("AVIA".equals(serviceName) || "CONCERT".equals(serviceName) || 
                    "SPECTACLE".equals(serviceName) || "EXHIBITION".equals(serviceName) ||
                    "MOVIE".equals(serviceName) || "SHOPPING_BANK".equals(serviceName)) {
             intervalSeconds = 180L * 24 * 60 * 60; // 6 месяцев ≈ 15552000 сек
         } else {
             intervalSeconds = 30L * 24 * 60 * 60; // 1 месяц ≈ 2592000 сек
         }
-
+        
         long ttl = closeTime + intervalSeconds - now;
-
+        
         // Отрицательный TTL заменяется на 1 неделю
         if (ttl < 0) {
             ttl = 7L * 24 * 60 * 60; // 604800 сек
         }
-
+        
+        // Ограничиваем TTL сверху 4 годами (как в CassandraStorage)
+        int fourYearsInSeconds = 4 * 365 * 24 * 60 * 60;
+        if (ttl > fourYearsInSeconds) {
+            ttl = fourYearsInSeconds;
+        }
+        
         return (int) ttl;
     }
 

@@ -648,10 +648,13 @@ public class CassandraStorage<K extends UUID, T extends Long, S extends CqlSessi
 
             int oneYearInSeconds = 365 * 24 * 60 * 60;
             int oneWeekInSeconds = 7 * 24 * 60 * 60;
+            int fourYearsInSeconds = 4 * oneYearInSeconds; // Максимальное значение TTL (4 года)
 
             if (ttlSeconds != null) {
                 // Если полученный ttl <= 0, то устанавливаем минимальное значение (1 неделя)
                 recordTtl = Math.toIntExact(ttlSeconds <= 0 ? oneWeekInSeconds : ttlSeconds);
+                // Ограничиваем TTL сверху 4 годами
+                recordTtl = Math.min(recordTtl, fourYearsInSeconds);
                 //log.info("TTL for offer_id {}: {}", keyValue, recordTtl);
             } else {
                 // Проставляем 2 года если отсутствуют значения в кэше
