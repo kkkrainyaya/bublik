@@ -652,7 +652,7 @@ public class CassandraStorage<K extends UUID, T extends Long, S extends CqlSessi
             if (ttlSeconds != null) {
                 // Если полученный ttl <= 0, то устанавливаем минимальное значение (1 неделя)
                 recordTtl = Math.toIntExact(ttlSeconds <= 0 ? oneWeekInSeconds : ttlSeconds);
-                log.info("TTL for offer_id {}: {}", keyValue, recordTtl);
+                //log.info("TTL for offer_id {}: {}", keyValue, recordTtl);
             } else {
                 // Проставляем 2 года если отсутствуют значения в кэше
                 log.warn("TTL из кэша не получен для offer_id={}, установлено значение по умолчанию 2 года", keyValue);
@@ -885,7 +885,7 @@ public class CassandraStorage<K extends UUID, T extends Long, S extends CqlSessi
             if (ttlSeconds != null) {
                 // Если полученный ttl <= 0, то устанавливаем минимальное значение (1 неделя)
                 recordTtl = Math.toIntExact(ttlSeconds <= 0 ? oneWeekInSeconds : ttlSeconds);
-                log.info("TTL for offer_id {}: {}", keyValue, recordTtl);
+                //log.info("TTL for offer_id {}: {}", keyValue, recordTtl);
             } else {
                 // Проставляем 2 года если отсутствуют значения в кэше
                 log.warn("TTL из кэша не получен для offer_id={}, установлено значение по умолчанию 2 года", keyValue);

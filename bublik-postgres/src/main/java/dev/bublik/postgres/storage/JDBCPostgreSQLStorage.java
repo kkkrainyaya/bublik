@@ -2502,7 +2502,7 @@ public class JDBCPostgreSQLStorage<K extends Integer, T extends Long, S extends 
                         cache.put(key, value);
                     }
                 }
-                log.info("Total cache loaded: {} rows", cache.size());
+                log.info("Total {} cache loaded: {} rows", entry.getKey(), cache.size());
 
             }
 

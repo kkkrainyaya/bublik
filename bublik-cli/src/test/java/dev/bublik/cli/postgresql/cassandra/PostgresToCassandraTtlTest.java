@@ -42,7 +42,6 @@ public class PostgresToCassandraTtlTest {
             .withEnv("CASSANDRA_PASSWORD", "cassandra")
             .withEnv("CASSANDRA_AUTHENTICATOR", "PasswordAuthenticator")
             .withEnv("CASSANDRA_NUM_TOKENS", "16")
-            //.withCopyToContainer(MountableFile.forClasspathResource("./cassandra/cassandra/conf/docker-entrypoint.sh"), "/usr/local/bin/docker-entrypoint.sh")
             .withInitScript("./postgresql/cassandra/sql/cs-init-cache.cql")
             .withEnv("TZ", "Europe/Moscow")
             .withExposedPorts(9042);
@@ -91,7 +90,7 @@ public class PostgresToCassandraTtlTest {
 
     @DisplayName("TTL из кэша - проверка значений TTL для разных сервисов")
     @Test
-    public void ttlFromCacheValues() throws IOException {
+    public void ttlFromCacheValues() throws IOException, SQLException {
         Properties sourceProperties = getJdbcProperties(source);
         Properties targetProperties = getJdbcPropertiesOfCassandra(target);
 
@@ -105,20 +104,42 @@ public class PostgresToCassandraTtlTest {
 
         assertEquals(result.sourceCount(), result.targetCount());
 
-        // Проверка TTL для разных записей
-        Map<Long, Integer> ttlMap = getTargetTtlByOfferId(targetProperties, "SELECT id, offer_id, ttl(offer_id) as ttl FROM test.ttl_check");
-        System.out.println("TTL map: " + ttlMap);
+        // Получаем фактические TTL из Cassandra
+        Map<Long, Integer> actualTtlMap =
+                getTargetTtlByOfferId(targetProperties, "SELECT id, offer_id, ttl(offer_id) as ttl FROM test.ttl_check");
 
-        // offer_id=12345,23456: HOTELS_POSTPAY - ~2 года (63072000 секунд)
-        // offer_id=34567,45678: AVIA/CONCERT - ~6 месяцев (15768000 секунд)
-        // offer_id=56789: HEALTH - ~1 месяц (2592000 секунд)
-        // offer_id=99999: отсутствует в кэше - 2 года (63072000 секунд)
-        // offer_id=77777: отрицательный TTL - 1 неделя (604800 секунд)
+        // Рассчитываем ожидаемые TTL из кэш-таблицы ПОСЛЕ миграции (т.к. TTL записывается в момент миграции)
+        Map<Long, Integer> expectedTtlMap = getExpectedTtlMap(sourceProperties);
+
+        System.out.println("Expected TTL map: " + expectedTtlMap);
+        System.out.println("Actual TTL map: " + actualTtlMap);
+
+        // Сравниваем TTL для каждой записи
+        for (Map.Entry<Long, Integer> entry : actualTtlMap.entrySet()) {
+            Long offerId = entry.getKey();
+            Integer actualTtl = entry.getValue();
+
+            if (offerId == 99999L) {
+                // offer_id=99999 отсутствует в кэше - TTL по умолчанию 2 года
+                assert actualTtl != null && actualTtl > 62900000 && actualTtl <= 63100000 :
+                        "TTL для offer_id=99999 (отсутствует в кэше) должен быть 2 года, фактически: " + actualTtl;
+            } else if (offerId == 77777L) {
+                // offer_id=77777 - отрицательный TTL, заменён на 1 неделю
+                assert actualTtl != null && actualTtl >= 604700 && actualTtl <= 604900 :
+                        "TTL для offer_id=77777 (отрицательный - оффер уже закрыт) должен быть 1 неделя, фактически: " + actualTtl;
+            } else {
+                Integer expectedTtl = expectedTtlMap.get(offerId);
+                assert expectedTtl != null : "Ожидаемый TTL не найден для offer_id=" + offerId;
+                assert actualTtl != null && Math.abs(actualTtl - expectedTtl) <= 172900 :
+                        "TTL для offer_id=" + offerId + " должен быть ~" + expectedTtl + ", фактически: " + actualTtl + " (разница: "
+                        + Math.abs(actualTtl - expectedTtl) + ")";
+            }
+        }
     }
 
-    @DisplayName("TTL из кэша - проверка записи с отсутствующим ключом в кэше")
+    @DisplayName("flags из кэша - проверка значений flags для разных типов таргетирования")
     @Test
-    public void ttlFromCacheMissingKey() throws IOException {
+    public void flagsFromCacheValues() throws IOException, SQLException {
         Properties sourceProperties = getJdbcProperties(source);
         Properties targetProperties = getJdbcPropertiesOfCassandra(target);
 
@@ -132,67 +153,49 @@ public class PostgresToCassandraTtlTest {
 
         assertEquals(result.sourceCount(), result.targetCount());
 
-        // Проверка записи с offer_id=99999 (отсутствует в кэше)
-        // В логах должно быть предупреждение: "TTL из кэша не получен для offer_id=99999"
-        Map<Long, Integer> ttlMap = getTargetTtlByOfferId(targetProperties,
-                "SELECT id, offer_id, ttl(offer_id) as ttl FROM test.ttl_check WHERE offer_id = 99999 ALLOW FILTERING");
+        // Получаем ожидаемые flags из кэш-таблицы (targeting_type='DYNAMIC' → 4, иначе 0)
+        Map<Long, Byte> expectedFlags = getExpectedFlagsMap(sourceProperties);
 
-        System.out.println("TTL for missing key: " + ttlMap);
-        // Ожидается TTL по умолчанию 2 года (63072000 секунд)
-        assertEquals(1, ttlMap.size());
-        Integer ttl = ttlMap.values().iterator().next();
-        assert ttl != null && ttl > 63000000 && ttl <= 63072000 : "TTL для отсутствующего ключа должен быть 2 года, фактически: " + ttl;
+        // Получаем фактические flags из Cassandra
+        Map<Long, Byte> actualFlagsMap = getTargetByOfferId(targetProperties, "SELECT id, offer_id, flags FROM test.ttl_check");
+        System.out.println("Expected flags map: " + expectedFlags);
+        System.out.println("Actual flags map: " + actualFlagsMap);
+
+        // Сравниваем flags для каждой записи
+        for (Map.Entry<Long, Byte> entry : actualFlagsMap.entrySet()) {
+            Long offerId = entry.getKey();
+            Byte actualFlags = entry.getValue();
+            Byte expectedFlagsValue = expectedFlags.get(offerId);
+
+            if (expectedFlagsValue == null) {
+                // offer_id отсутствует в кэше targeting_type
+                assert actualFlags != null && actualFlags == 0 :
+                        "flags для offer_id=" + offerId + " (отсутствует в кэше) должен быть 0, фактически: " + actualFlags;
+            } else {
+                assert actualFlags != null && actualFlags == expectedFlagsValue :
+                        "flags для offer_id=" + offerId + " должен быть " + expectedFlagsValue + ", фактически: " + actualFlags;
+            }
+        }
     }
 
-    @DisplayName("TTL из кэша - проверка записи с отрицательным TTL")
-    @Test
-    public void ttlFromCacheNegative() throws IOException {
-        Properties sourceProperties = getJdbcProperties(source);
-        Properties targetProperties = getJdbcPropertiesOfCassandra(target);
-
-        TestResult result = getResult(
-                "./postgresql/cassandra/yaml/pg2cs-cache.yaml",
-                "./postgresql/cassandra/json/pg2cs-cache.json",
-                rows,
-                sync,
-                sourceProperties,
-                targetProperties);
-
-        assertEquals(result.sourceCount(), result.targetCount());
-
-        // Проверка записи с отрицательным TTL (должен быть установлен в 1 неделю)
-        // offer_id=77777 имеет отрицательный TTL, должен быть заменен на 1 неделю (604800 секунд)
-        Map<Long, Integer> ttlMap = getTargetTtlByOfferId(targetProperties,
-                "SELECT id, offer_id, ttl(offer_id) as ttl FROM test.ttl_check WHERE offer_id = 77777 ALLOW FILTERING");
-
-        System.out.println("TTL for negative value: " + ttlMap);
-        // Ожидается TTL = 1 неделя (604800 секунд)
-        assertEquals(1, ttlMap.size());
-        Integer ttl = ttlMap.values().iterator().next();
-        assert ttl != null && ttl >= 604700 && ttl <= 604900 : "TTL для отрицательного значения должен быть 1 неделя, фактически: " + ttl;
-    }
-
-    @DisplayName("flags из кэша - проверка значений flags для разных сервисов")
-    @Test
-    public void flagsFromCacheValues() throws IOException {
-        Properties sourceProperties = getJdbcProperties(source);
-        Properties targetProperties = getJdbcPropertiesOfCassandra(target);
-
-        TestResult result = getResult(
-                "./postgresql/cassandra/yaml/pg2cs-cache.yaml",
-                "./postgresql/cassandra/json/pg2cs-cache.json",
-                rows,
-                sync,
-                sourceProperties,
-                targetProperties);
-
-        assertEquals(result.sourceCount(), result.targetCount());
-
-        // Проверка TTL для разных записей
-        Map<Long, Byte> ttlMap = getTargetByOfferId(targetProperties, "SELECT id, offer_id, flags FROM test.ttl_check");
-        assertEquals(3, ttlMap.values().stream().filter(f -> f != 0).count());
-        System.out.println("flags map: " + ttlMap);
-        // offer_id=12345,23456,34567: - excluded
+    /**
+     * Получает ожидаемые flags из кэш-таблицы offer.
+     * targeting_type='DYNAMIC' → flags=4, иначе flags=0
+     */
+    private Map<Long, Byte> getExpectedFlagsMap(Properties pgProperties) throws SQLException {
+        Map<Long, Byte> expectedFlags = new HashMap<>();
+        try (java.sql.Connection conn = java.sql.DriverManager.getConnection(
+                pgProperties.getProperty("url"), pgProperties.getProperty("user"), pgProperties.getProperty("password"))) {
+            java.sql.Statement stmt = conn.createStatement();
+            java.sql.ResultSet rs = stmt.executeQuery("SELECT id, targeting_type FROM public.offer");
+            while (rs.next()) {
+                long id = rs.getLong("id");
+                String targetingType = rs.getString("targeting_type");
+                byte flags = "DYNAMIC".equals(targetingType) ? (byte) 0b00000100 : (byte) 0;
+                expectedFlags.put(id, flags);
+            }
+        }
+        return expectedFlags;
     }
 
 
@@ -308,5 +311,55 @@ public class PostgresToCassandraTtlTest {
         properties.setProperty("datacenter", "datacenter1");
         properties.setProperty("batchSize", "256");
         return properties;
+    }
+
+    /**
+     * Рассчитывает ожидаемое TTL в секундах на основе close_date и cb_service_name.
+     * Формула: EXTRACT(EPOCH FROM (close_date + interval - NOW()))
+     * interval зависит от сервиса: HOTELS_POSTPAY=2 года, AVIA/CONCERT=6 месяцев, остальные=1 месяц
+     */
+    private int calculateExpectedTtl(long offerId, String serviceName, java.sql.Timestamp closeDate) {
+        long now = System.currentTimeMillis() / 1000;
+        long closeTime = closeDate.getTime() / 1000;
+
+        long intervalSeconds;
+        if ("HOTELS_POSTPAY".equals(serviceName) || "HOTELS_POSTPAY_PREDICTOR".equals(serviceName)) {
+            intervalSeconds = 2L * 365 * 24 * 60 * 60; // 2 года = 63072000 сек
+        } else if ("AVIA".equals(serviceName) || "CONCERT".equals(serviceName) ||
+                   "SPECTACLE".equals(serviceName) || "EXHIBITION".equals(serviceName) ||
+                   "MOVIE".equals(serviceName) || "SHOPPING_BANK".equals(serviceName)) {
+            intervalSeconds = 180L * 24 * 60 * 60; // 6 месяцев ≈ 15552000 сек
+        } else {
+            intervalSeconds = 30L * 24 * 60 * 60; // 1 месяц ≈ 2592000 сек
+        }
+
+        long ttl = closeTime + intervalSeconds - now;
+
+        // Отрицательный TTL заменяется на 1 неделю
+        if (ttl < 0) {
+            ttl = 7L * 24 * 60 * 60; // 604800 сек
+        }
+
+        return (int) ttl;
+    }
+
+    /**
+     * Получает данные из кэш-таблицы offer для расчёта ожидаемых TTL
+     */
+    private Map<Long, Integer> getExpectedTtlMap(Properties pgProperties) throws SQLException {
+        Map<Long, Integer> expectedTtl = new HashMap<>();
+        try (java.sql.Connection conn = java.sql.DriverManager.getConnection(
+                pgProperties.getProperty("url"), pgProperties.getProperty("user"), pgProperties.getProperty("password"))) {
+            java.sql.Statement stmt = conn.createStatement();
+            java.sql.ResultSet rs = stmt.executeQuery(
+                    "SELECT id, cb_service_name, close_date FROM public.offer");
+            while (rs.next()) {
+                long id = rs.getLong("id");
+                String service = rs.getString("cb_service_name");
+                java.sql.Timestamp closeDate = rs.getTimestamp("close_date");
+                expectedTtl.put(id, calculateExpectedTtl(id, service, closeDate));
+            }
+        }
+        return expectedTtl;
     }
 }

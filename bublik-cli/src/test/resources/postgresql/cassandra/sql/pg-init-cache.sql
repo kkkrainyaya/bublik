@@ -19,23 +19,23 @@ create table public.source (
 -- Вставка тестовых данных в offer
 -- id=12345: HOTELS_POSTPAY - живет 2 года
 insert into public.offer (id, open_date, cb_service_name, targeting_type, close_date) 
-values (12345, '2025-06-04 00:00:00.000 +0300', 'HOTELS_POSTPAY', 'DYNAMIC', '2027-06-04 00:00:00.000 +0300');
+values (12345, '2025-06-04 00:00:00.000 +0300', 'HOTELS_POSTPAY', 'DYNAMIC', '2026-12-04 00:00:00.000 +0300');
 
 -- id=23456: HOTELS_POSTPAY_PREDICTOR - живет 2 года
 insert into public.offer (id, open_date, cb_service_name, targeting_type, close_date) 
-values (23456, '2025-06-04 00:00:00.000 +0300', 'HOTELS_POSTPAY_PREDICTOR', 'DYNAMIC', '2027-06-04 00:00:00.000 +0300');
+values (23456, '2025-06-04 00:00:00.000 +0300', 'HOTELS_POSTPAY_PREDICTOR', 'DYNAMIC', '2026-12-04 00:00:00.000 +0300');
 
 -- id=34567: AVIA - живет 6 месяцев
 insert into public.offer (id, open_date, cb_service_name, targeting_type, close_date) 
-values (34567, '2025-06-04 00:00:00.000 +0300', 'AVIA', 'DYNAMIC', '2025-12-04 00:00:00.000 +0300');
+values (34567, '2025-06-04 00:00:00.000 +0300', 'AVIA', 'DYNAMIC', '2026-12-04 00:00:00.000 +0300');
 
 -- id=45678: CONCERT - живет 6 месяцев
 insert into public.offer (id, open_date, cb_service_name, targeting_type, close_date) 
-values (45678, '2025-06-04 00:00:00.000 +0300', 'CONCERT', 'TRANSACTION', '2025-12-04 00:00:00.000 +0300');
+values (45678, '2025-06-04 00:00:00.000 +0300', 'CONCERT', 'TRANSACTION', '2026-12-04 00:00:00.000 +0300');
 
 -- id=56789: HEALTH - живет 1 месяц
 insert into public.offer (id, open_date, cb_service_name, targeting_type, close_date) 
-values (56789, '2025-06-04 00:00:00.000 +0300', 'HEALTH', 'TRANSACTION', '2025-07-04 00:00:00.000 +0300');
+values (56789, '2025-06-04 00:00:00.000 +0300', 'HEALTH', 'TRANSACTION', '2026-12-04 00:00:00.000 +0300');
 
 -- id=77777: EXPIRED - для теста отрицательного TTL
 insert into public.offer (id, open_date, cb_service_name, targeting_type, close_date) 
